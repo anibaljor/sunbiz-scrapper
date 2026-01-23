@@ -139,9 +139,33 @@ def scrape_document(doc_number: str, page) -> Dict:
     # Ir a la página con timeout más largo
     page.goto(base, timeout=60000, wait_until="domcontentloaded")
     
-    # Esperar que el input esté visible y listo
-    page.wait_for_selector('input[name="SearchTerm"]', state="visible", timeout=30000)
-    page.fill('input[name="SearchTerm"]', doc_number)
+    # Esperar que el input esté visible y listo (capturar depuración si falla)
+    try:
+        page.wait_for_selector('input[name="SearchTerm"]', state="visible", timeout=60000)
+        page.fill('input[name="SearchTerm"]', doc_number)
+    except Exception as e:
+        # intentar guardar artefactos para diagnosticar en Railway
+        try:
+            png_path = f"/tmp/debug_{doc_number}.png"
+            html_path = f"/tmp/debug_{doc_number}.html"
+            try:
+                page.screenshot(path=png_path, full_page=True)
+            except Exception:
+                png_path = None
+            try:
+                with open(html_path, "w", encoding="utf-8") as fh:
+                    fh.write(page.content())
+            except Exception:
+                html_path = None
+        except Exception:
+            png_path = None
+            html_path = None
+        url = ""
+        try:
+            url = page.url
+        except Exception:
+            url = "<unknown>"
+        raise Exception(f"Timeout waiting for SearchTerm input (page url={url}). Debug files: png={png_path}, html={html_path}. Original error: {e}")
     
     # Click y esperar navegación
     page.click('input[type="submit"]')
@@ -374,15 +398,26 @@ async def scrape_endpoint(doc_number: str):
     def _sync_scrape(dn: str):
         with sync_playwright() as p:
             browser = p.chromium.launch(
-                headless=True,
+                headless=False,
                 args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
             )
-            page = browser.new_page()
+            # create a browser context with a realistic user-agent/locale
+            context = browser.new_context(
+                user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/115.0.0.0 Safari/537.36"),
+                locale="en-US"
+            )
+            page = context.new_page()
             page.set_default_timeout(60000)  # 60 segundos por defecto
             try:
                 return scrape_document(dn.strip(), page)
             finally:
                 try:
+                    try:
+                        context.close()
+                    except Exception:
+                        pass
                     browser.close()
                 except Exception:
                     pass
