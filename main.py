@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 import uvicorn
+import os
 import re
 import time
 from typing import Dict, Optional, List
@@ -397,8 +398,10 @@ async def scrape_endpoint(doc_number: str):
 
     def _sync_scrape(dn: str):
         with sync_playwright() as p:
+            headless_env = os.environ.get("HEADLESS", "true").lower()
+            headless_flag = headless_env not in ("0", "false", "no")
             browser = p.chromium.launch(
-                headless=False,
+                headless=headless_flag,
                 args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
             )
             # create a browser context with a realistic user-agent/locale
