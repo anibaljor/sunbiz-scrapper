@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 import uvicorn
 import re
 import time
@@ -362,18 +363,22 @@ async def scrape_endpoint(doc_number: str):
     """
     if not doc_number or len(doc_number.strip()) == 0:
         raise HTTPException(status_code=400, detail="doc_number parameter is required")
-    
-    try:
+
+    def _sync_scrape(dn: str):
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             page = browser.new_page()
-            
-            result = scrape_document(doc_number.strip(), page)
-            
-            browser.close()
-            
-            return JSONResponse(content=result)
-            
+            try:
+                return scrape_document(dn.strip(), page)
+            finally:
+                try:
+                    browser.close()
+                except Exception:
+                    pass
+
+    try:
+        result = await run_in_threadpool(_sync_scrape, doc_number)
+        return JSONResponse(content=result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Scraping error: {str(e)}")
 
