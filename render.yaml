@@ -1,10 +1,8 @@
 services:
   - type: web
     name: sunbiz-scraper
-    runtime: python
+    runtime: docker
     plan: free
-    buildCommand: pip install -r requirements.txt && playwright install --with-deps chromium
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.12.0
+      - key: PORT
+        value: 8000
