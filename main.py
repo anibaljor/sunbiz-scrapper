@@ -396,7 +396,7 @@ async def scrape_endpoint(doc_number: str):
                 locale="en-US"
             )
             page = context.new_page()
-            page.set_default_timeout(60000)  # 60 segundos por defecto
+            page.set_default_timeout(100000)  # 60 segundos por defecto
             try:
                 return scrape_document(dn.strip(), page)
             finally:
