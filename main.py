@@ -3,7 +3,6 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 import uvicorn
 import os
-import base64
 import re
 import time
 from typing import Dict, Optional, List
@@ -146,28 +145,12 @@ def scrape_document(doc_number: str, page) -> Dict:
         page.wait_for_selector('input[name="SearchTerm"]', state="visible", timeout=60000)
         page.fill('input[name="SearchTerm"]', doc_number)
     except Exception as e:
-        # intentar guardar artefactos para diagnosticar en Railway
-        try:
-            png_path = f"/tmp/debug_{doc_number}.png"
-            html_path = f"/tmp/debug_{doc_number}.html"
-            try:
-                page.screenshot(path=png_path, full_page=True)
-            except Exception:
-                png_path = None
-            try:
-                with open(html_path, "w", encoding="utf-8") as fh:
-                    fh.write(page.content())
-            except Exception:
-                html_path = None
-        except Exception:
-            png_path = None
-            html_path = None
-        url = ""
+        url = "<unknown>"
         try:
             url = page.url
         except Exception:
-            url = "<unknown>"
-        raise Exception(f"Timeout waiting for SearchTerm input (page url={url}). Debug files: png={png_path}, html={html_path}. Original error: {e}")
+            pass
+        raise Exception(f"Timeout waiting for SearchTerm input (page url={url}). Original error: {e}")
     
     # Click y esperar navegación
     page.click('input[type="submit"]')
@@ -430,42 +413,7 @@ async def scrape_endpoint(doc_number: str):
         result = await run_in_threadpool(_sync_scrape, doc_number)
         return JSONResponse(content=result)
     except Exception as e:
-        err_str = str(e)
-        debug_env = os.environ.get("DEBUG", "0").lower() in ("1", "true", "yes")
-        if debug_env:
-            # try to extract paths from error message and include file contents
-            png_path = None
-            html_path = None
-            m_png = re.search(r"png=([^,\s]+)", err_str)
-            m_html = re.search(r"html=([^,\s]+)", err_str)
-            if m_png:
-                png_path = m_png.group(1)
-            if m_html:
-                html_path = m_html.group(1)
-
-            debug_png_b64 = None
-            debug_html = None
-            try:
-                if png_path and os.path.exists(png_path):
-                    with open(png_path, "rb") as fh:
-                        debug_png_b64 = base64.b64encode(fh.read()).decode("ascii")
-            except Exception:
-                debug_png_b64 = None
-            try:
-                if html_path and os.path.exists(html_path):
-                    with open(html_path, "r", encoding="utf-8") as fh:
-                        debug_html = fh.read()
-            except Exception:
-                debug_html = None
-
-            content = {"error": err_str}
-            if debug_png_b64:
-                content["debug_png_b64"] = debug_png_b64
-            if debug_html:
-                content["debug_html"] = debug_html
-            return JSONResponse(status_code=500, content=content)
-        # default behaviour
-        raise HTTPException(status_code=500, detail=f"Scraping error: {err_str}")
+        raise HTTPException(status_code=500, detail=f"Scraping error: {str(e)}")
 
 
 if __name__ == "__main__":
