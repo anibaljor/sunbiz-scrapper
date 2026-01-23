@@ -134,31 +134,63 @@ def parse_detail_page(text: str, filing_values: Dict[str, str] = None) -> Dict[s
     return data
 
 
+def goto_and_wait_search(page, url: str, timeout_ms: int = 120_000):
+    # Navegación más “fuerte” para prod
+    page.goto(url, timeout=timeout_ms, wait_until="load")
+    body_text = page.inner_text("body")[:2000]
+    if "captcha" in body_text.lower() or "access denied" in body_text.lower():
+        raise Exception(f"Blocked or challenged by site (url={page.url})")
+    page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+
+    # Esperar primero “attached” (existe) y luego “visible”
+    locator = page.locator('input[name="SearchTerm"]')
+    locator.wait_for(state="attached", timeout=timeout_ms)
+    locator.scroll_into_view_if_needed(timeout=timeout_ms)
+    locator.wait_for(state="visible", timeout=timeout_ms)
+    return locator
+
 def scrape_document(doc_number: str, page) -> Dict:
     base = "https://search.sunbiz.org/Inquiry/CorporationSearch/ByDocumentNumber"
-    
-    # Ir a la página con timeout más largo
-    page.goto(base, timeout=60000, wait_until="domcontentloaded")
-    
-    # Esperar que el input esté visible y listo (capturar depuración si falla)
-    try:
-        page.wait_for_selector('input[name="SearchTerm"]', state="visible", timeout=60000)
-        page.fill('input[name="SearchTerm"]', doc_number)
-    except Exception as e:
-        url = "<unknown>"
+
+    last_err = None
+    for attempt in range(1, 4):  # 3 intentos
         try:
-            url = page.url
-        except Exception:
-            pass
-        raise Exception(f"Timeout waiting for SearchTerm input (page url={url}). Original error: {e}")
-    
+            search_input = goto_and_wait_search(page, base, timeout_ms=120_000)
+            search_input.fill(doc_number)
+            break
+        except Exception as e:
+            last_err = e
+
+            # Diagnóstico: ¿qué página llegó realmente?
+            try:
+                title = page.title()
+            except Exception:
+                title = "<no-title>"
+
+            try:
+                html = page.content()
+            except Exception:
+                html = "<no-html>"
+
+            # Log mínimo (Railway logs)
+            print(f"[attempt {attempt}] url={page.url} title={title}")
+            print(f"[attempt {attempt}] html_head={html[:600]}")
+
+            # Reintentar con reload (a veces destraba challenges/transitorios)
+            try:
+                page.reload(wait_until="load", timeout=120_000)
+            except Exception:
+                pass
+
+            if attempt == 3:
+                raise Exception(
+                    f"Timeout waiting for SearchTerm input (url={page.url}). "
+                    f"Last error: {last_err}"
+                )
+
     # Click y esperar navegación
     page.click('input[type="submit"]')
-    
-    try:
-        page.wait_for_load_state("networkidle", timeout=30000)
-    except Exception:
-        time.sleep(2)
+    page.wait_for_load_state("domcontentloaded", timeout=120_000)
 
     content = page.content()
     if "Record Not Found" in content or "Record Not Found" in page.inner_text("body"):
