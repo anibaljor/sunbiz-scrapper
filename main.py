@@ -135,14 +135,21 @@ def parse_detail_page(text: str, filing_values: Dict[str, str] = None) -> Dict[s
 
 def scrape_document(doc_number: str, page) -> Dict:
     base = "https://search.sunbiz.org/Inquiry/CorporationSearch/ByDocumentNumber"
-    page.goto(base)
+    
+    # Ir a la página con timeout más largo
+    page.goto(base, timeout=60000, wait_until="domcontentloaded")
+    
+    # Esperar que el input esté visible y listo
+    page.wait_for_selector('input[name="SearchTerm"]', state="visible", timeout=30000)
     page.fill('input[name="SearchTerm"]', doc_number)
+    
+    # Click y esperar navegación
     page.click('input[type="submit"]')
     
     try:
-        page.wait_for_load_state("networkidle", timeout=10000)
+        page.wait_for_load_state("networkidle", timeout=30000)
     except Exception:
-        time.sleep(1)
+        time.sleep(2)
 
     content = page.content()
     if "Record Not Found" in content or "Record Not Found" in page.inner_text("body"):
@@ -219,7 +226,7 @@ def scrape_document(doc_number: str, page) -> Dict:
                 spans = sec.query_selector_all('span')
                 header = spans[0].inner_text().strip() if spans else ''
                 if header == 'Authorized Person(s) Detail':
-                    authorized = sec.evaluate('''el => {
+                    authorized = sec.evaluate(r'''el => {
                         const out = [];
                         const spans = Array.from(el.querySelectorAll('span'));
                         for (let i = 0; i < spans.length; i++) {
@@ -265,7 +272,7 @@ def scrape_document(doc_number: str, page) -> Dict:
                             }
                         }
                         return out;
-                    ''')
+                    }''')
                     break
             except Exception:
                 continue
@@ -366,8 +373,12 @@ async def scrape_endpoint(doc_number: str):
 
     def _sync_scrape(dn: str):
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(
+                headless=True,
+                args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+            )
             page = browser.new_page()
+            page.set_default_timeout(60000)  # 60 segundos por defecto
             try:
                 return scrape_document(dn.strip(), page)
             finally:
