@@ -140,6 +140,11 @@ def goto_and_wait_search(page, url: str, timeout_ms: int = 120_000):
     body_text = page.inner_text("body")[:2000]
     if "captcha" in body_text.lower() or "access denied" in body_text.lower():
         raise Exception(f"Blocked or challenged by site (url={page.url})")
+    elif "Service Unavailable" in body_text:
+        raise Exception(f"Service Unavailable (url={page.url})")
+    elif "cloudflare" in body_text.lower() or "just a moment" in body_text.lower():
+        raise Exception(f"Blocked by Cloudflare challenge. url={page.url}")
+
     page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
 
     # Esperar primero “attached” (existe) y luego “visible”
