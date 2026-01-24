@@ -434,9 +434,16 @@ async def scrape_endpoint(doc_number: str):
                 user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                             "AppleWebKit/537.36 (KHTML, like Gecko) "
                             "Chrome/115.0.0.0 Safari/537.36"),
-                locale="en-US"
+                locale="en-US",
+                timezone_id="America/Los_Angeles",
+                geolocation={"latitude": 37.7749, "longitude": -122.4194},
+                permissions=["geolocation"],
+                ignore_https_errors=True,
+                accept_downloads=True,
+                java_script_enabled=True
             )
             page = context.new_page()
+            page.set_extra_http_headers({"Accept-Language": "en-US,en;q=0.9", "Accept-Encoding": "gzip, deflate, br", "Content-Type": "application/x-www-form-urlencoded"})
             page.set_default_timeout(100000)  # 60 segundos por defecto
             try:
                 return scrape_document(dn.strip(), page)
