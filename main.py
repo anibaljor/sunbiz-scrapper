@@ -137,6 +137,10 @@ def parse_detail_page(text: str, filing_values: Dict[str, str] = None) -> Dict[s
 def goto_and_wait_search(page, url: str, timeout_ms: int = 120_000):
     # Navegación más “fuerte” para prod
     page.goto(url, timeout=timeout_ms, wait_until="load")
+    # 2. Esperar a que Cloudflare termine
+    time.sleep(1)
+    page.wait_for_load_state('networkidle')
+    time.sleep(2)
     body_text = page.inner_text("body")[:2000]
     if "captcha" in body_text.lower() or "access denied" in body_text.lower():
         raise Exception(f"Blocked or challenged by site (url={page.url})")
