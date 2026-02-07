@@ -8,6 +8,7 @@ import time
 import random
 from typing import Dict, Optional, List
 from playwright.sync_api import sync_playwright
+from playwright_stealth import stealth_sync
 from html import unescape
 
 app = FastAPI(title="Sunbiz Scraper API")
@@ -136,36 +137,34 @@ def parse_detail_page(text: str, filing_values: Dict[str, str] = None) -> Dict[s
 
 
 def goto_and_wait_search(page, url: str, timeout_ms: int = 120_000):
-    print(f"[SCRAPE] Navigating to {url}")
+    # Navegación más “fuerte” para prod
     page.goto(url, timeout=timeout_ms, wait_until="load")
-    time.sleep(random.uniform(2, 4))
+    # Esperar a que Cloudflare termine
+    time.sleep(3)
     page.wait_for_load_state('networkidle')
-    time.sleep(random.uniform(3, 6))
-    
-    body_text = page.inner_text("body")[:3000]
+    time.sleep(4)
+    body_text = page.inner_text("body")[:2000]
     if "captcha" in body_text.lower() or "access denied" in body_text.lower():
         raise Exception(f"Blocked or challenged by site (url={page.url})")
     elif "Service Unavailable" in body_text:
         raise Exception(f"Service Unavailable (url={page.url})")
     elif "cloudflare" in body_text.lower() or "just a moment" in body_text.lower():
-        print(f"[SCRAPE] Cloudflare detected, waiting longer...")
-        time.sleep(random.uniform(5, 10))
+        raise Exception(f"Blocked by Cloudflare challenge. url={page.url}")
 
     page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+
+    # Esperar primero “attached” (existe) y luego “visible”
     locator = page.locator('input[name="SearchTerm"]')
     locator.wait_for(state="attached", timeout=timeout_ms)
-    time.sleep(random.uniform(1, 2))
     locator.scroll_into_view_if_needed(timeout=timeout_ms)
-    time.sleep(random.uniform(0.5, 1.5))
     locator.wait_for(state="visible", timeout=timeout_ms)
-    print(f"[SCRAPE] SearchTerm found and visible")
     return locator
 
 def scrape_document(doc_number: str, page) -> Dict:
     base = "https://search.sunbiz.org/Inquiry/CorporationSearch/ByDocumentNumber"
 
     last_err = None
-    for attempt in range(1, 4):
+    for attempt in range(1, 4):  # 3 intentos
         try:
             search_input = goto_and_wait_search(page, base, timeout_ms=120_000)
             search_input.fill(doc_number)
@@ -173,6 +172,7 @@ def scrape_document(doc_number: str, page) -> Dict:
         except Exception as e:
             last_err = e
 
+            # Diagnóstico: ¿qué página llegó realmente?
             try:
                 title = page.title()
             except Exception:
@@ -183,9 +183,11 @@ def scrape_document(doc_number: str, page) -> Dict:
             except Exception:
                 html = "<no-html>"
 
-            print(f"[SCRAPE attempt {attempt}] url={page.url} title={title}")
-            print(f"[SCRAPE attempt {attempt}] error={str(e)}")
+            # Log mínimo (Railway logs)
+            print(f"[attempt {attempt}] url={page.url} title={title}")
+            print(f"[attempt {attempt}] html_head={html[:600]}")
 
+            # Reintentar con reload (a veces destraba challenges/transitorios)
             try:
                 page.reload(wait_until="load", timeout=120_000)
             except Exception:
@@ -197,6 +199,7 @@ def scrape_document(doc_number: str, page) -> Dict:
                     f"Last error: {last_err}"
                 )
 
+    # Click y esperar navegación
     page.click('input[type="submit"]')
     page.wait_for_load_state("domcontentloaded", timeout=120_000)
 
@@ -409,8 +412,8 @@ async def root():
             "/scrape": "GET - Scrape document by number (param: doc_number)"
         },
         "configuration": {
-            "BROWSER": "chromium (default) or edge",
-            "HEADLESS": "false (default) or true"
+            "BROWSER": "chromium (default) or edge - Set via environment variable",
+            "HEADLESS": "true (default) or false - Run in headless mode"
         },
         "example": "/scrape?doc_number=L05000113016"
     }
@@ -431,8 +434,6 @@ async def scrape_endpoint(doc_number: str):
             headless_flag = headless_env not in ("0", "false", "no")
             browser_type = os.environ.get("BROWSER", "chromium").lower()
             
-            print(f"[SCRAPE] Browser: {browser_type}, Headless: {headless_flag}")
-            
             if browser_type == "edge":
                 browser = p.chromium.launch(
                     channel="msedge",
@@ -444,7 +445,7 @@ async def scrape_endpoint(doc_number: str):
                     headless=headless_flag,
                     args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
                 )
-            
+            # create a browser context with a realistic user-agent/locale
             context = browser.new_context(
                 user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                             "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -457,9 +458,7 @@ async def scrape_endpoint(doc_number: str):
                 accept_downloads=True,
                 java_script_enabled=True
             )
-            
             page = context.new_page()
-            
             page.set_extra_http_headers({
                 "Accept-Language": "en-US,en;q=0.9",
                 "Accept-Encoding": "gzip, deflate, br",
@@ -471,18 +470,15 @@ async def scrape_endpoint(doc_number: str):
                 "Sec-Fetch-User": "?1",
                 "Upgrade-Insecure-Requests": "1"
             })
-            page.set_default_timeout(100000)
-            
+            page.set_default_timeout(100000)  # 60 segundos por defecto
             try:
-                result = scrape_document(dn.strip(), page)
-                print(f"[SCRAPE] Success: {result.get('found')}")
-                return result
+                return scrape_document(dn.strip(), page)
             finally:
                 try:
-                    context.close()
-                except Exception:
-                    pass
-                try:
+                    try:
+                        context.close()
+                    except Exception:
+                        pass
                     browser.close()
                 except Exception:
                     pass
@@ -491,7 +487,6 @@ async def scrape_endpoint(doc_number: str):
         result = await run_in_threadpool(_sync_scrape, doc_number)
         return JSONResponse(content=result)
     except Exception as e:
-        print(f"[ERROR] {str(e)}")
         raise HTTPException(status_code=500, detail=f"Scraping error: {str(e)}")
 
 
